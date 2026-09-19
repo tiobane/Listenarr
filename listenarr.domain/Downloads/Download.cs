@@ -420,17 +420,25 @@ namespace Listenarr.Domain.Downloads
             }
 
             var clientDownloadId = download.GetMetadataString("ClientDownloadId");
-            if (!string.IsNullOrWhiteSpace(clientDownloadId) &&
-                string.Equals(clientDownloadId, Id, StringComparison.OrdinalIgnoreCase))
-            {
-                return 3;
-            }
-
             var torrentHash = download.GetMetadataString("TorrentHash");
-            if (!string.IsNullOrWhiteSpace(torrentHash) &&
-                string.Equals(torrentHash, Id, StringComparison.OrdinalIgnoreCase))
+
+            var hasKnownClientIdentity =
+                !string.IsNullOrWhiteSpace(clientDownloadId) ||
+                !string.IsNullOrWhiteSpace(torrentHash);
+
+            if (hasKnownClientIdentity)
             {
-                return 3;
+                if ((!string.IsNullOrWhiteSpace(clientDownloadId) &&
+                     string.Equals(clientDownloadId, Id, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrWhiteSpace(torrentHash) &&
+                     string.Equals(torrentHash, Id, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return 3;
+                }
+
+                // Once a download is bound to a concrete external client item,
+                // do not allow another item to claim it through title fallback.
+                return 0;
             }
 
             if (TitleUtils.TitlesExactlyMatch(download.Title, Title))
