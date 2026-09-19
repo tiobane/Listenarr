@@ -24,6 +24,7 @@ namespace Listenarr.Application.Metadata.Audible
         public string? ContentDeliveryType { get; set; }
         public string? EpisodeType { get; set; }
         public string? Sku { get; set; }
+        public string? SkuGroup { get; set; }
     }
 
     public class AudibleAuthor { public string? Asin { get; set; } public string? Name { get; set; } public string? Region { get; set; } }
@@ -49,6 +50,7 @@ namespace Listenarr.Application.Metadata.Audible
         public string? ContentDeliveryType { get; set; }
         public string? EpisodeType { get; set; }
         public string? Sku { get; set; }
+        public string? SkuGroup { get; set; }
         public string? BookFormat { get; set; }
         public List<AudibleGenre>? Genres { get; set; }
         public List<AudibleSeries>? Series { get; set; }
