@@ -8,9 +8,13 @@
  * (at your option) any later version.
  */
 
+using Listenarr.Tests.Common;
+
 namespace Listenarr.Tests.Features.Domain.Downloads
 {
-    public class QueueItemMatchingTests
+    [Trait("Name", "QueueItemMatchingTests")]
+    [Trait("Category", "Domain")]
+    public sealed class QueueItemMatchingTests : BaseTests
     {
         [Fact]
         public void GetMatchScore_DifferentKnownClientId_DoesNotFallBackToExactTitle()
