@@ -83,7 +83,8 @@ namespace Listenarr.Application.Metadata.Audible
                 ContentType = GetString(product, "content_type"),
                 ContentDeliveryType = GetString(product, "content_delivery_type"),
                 EpisodeType = GetString(product, "episode_type"),
-                Sku = GetString(product, "sku")
+                Sku = GetString(product, "sku"),
+                SkuGroup = GetString(product, "sku_lite")
             };
         }
 
@@ -109,6 +110,7 @@ namespace Listenarr.Application.Metadata.Audible
                 ContentDeliveryType = book.ContentDeliveryType,
                 EpisodeType = book.EpisodeType,
                 Sku = book.Sku,
+                SkuGroup = book.SkuGroup,
                 BookFormat = book.BookFormat,
                 Genres = book.Genres,
                 Series = book.Series,

@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 using System.Reflection;
+using System.Text.Json;
 
 namespace Listenarr.Tests.Features.Application.Metadata.Audible
 {
@@ -79,6 +80,28 @@ namespace Listenarr.Tests.Features.Application.Metadata.Audible
         {
             var result = AudibleService.RemoveDiacritics(null!);
             Assert.Null(result);
+        }
+
+        [Fact]
+        public void AudibleProductMapper_MapsSkuLiteToSkuGroup()
+        {
+            using var doc = JsonDocument.Parse("""
+                {
+                  "asin": "B00H7CH4Z8",
+                  "title": "Zero Day",
+                  "sku": "BK_RHDE_002148DE",
+                  "sku_lite": "BK_RHDE_002148"
+                }
+                """);
+
+            var book = AudibleProductMapper.MapProductToBookResponse(doc.RootElement, "de");
+            Assert.NotNull(book);
+            Assert.Equal("BK_RHDE_002148DE", book.Sku);
+            Assert.Equal("BK_RHDE_002148", book.SkuGroup);
+
+            var searchResult = AudibleProductMapper.MapBookResponseToSearchResult(book);
+            Assert.NotNull(searchResult);
+            Assert.Equal("BK_RHDE_002148", searchResult.SkuGroup);
         }
 
         [Fact]

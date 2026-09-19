@@ -128,6 +128,8 @@ namespace Listenarr.Application.Metadata.Audible
                     Language = meta.Language,
                     ContentType = meta.ContentType,
                     ContentDeliveryType = meta.ContentDeliveryType,
+                    Sku = meta.Sku,
+                    SkuGroup = meta.SkuGroup,
                     BookFormat = meta.BookFormat,
                     Genres = meta.Genres,
                     Series = meta.Series,
