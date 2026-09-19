@@ -210,6 +210,7 @@ public sealed class SearchResponseMapper
                 ? MarketDomainResolver.BuildAudibleProductUrl(book.Asin, region)
                 : (string?)null,
             sku = book.Sku,
+            skuGroup = book.SkuGroup,
             isListenable = !string.IsNullOrWhiteSpace(book.Asin),
             isAvailable = true,
             isBuyable = true,
@@ -412,7 +413,7 @@ public sealed class SearchResponseMapper
             hasPdf = false,
             link = NormalizeAudibleProductUrl(md?.ProductUrl, aud.Asin ?? md?.Asin, aud.Region ?? region),
             sku = aud.Sku,
-            skuGroup = (string?)null,
+            skuGroup = aud.SkuGroup,
             isListenable = !string.IsNullOrWhiteSpace(aud.Asin ?? md?.Asin),
             isAvailable = true,
             isBuyable = true,
