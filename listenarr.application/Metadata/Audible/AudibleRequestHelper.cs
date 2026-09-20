@@ -55,6 +55,13 @@ public static class AudibleRequestHelper
             ["br"] = "pt-BR",
         };
 
+    public static IReadOnlyCollection<string> SupportedRegions { get; } = AudibleApiDomainMap.Keys.ToArray();
+
+    public static bool IsSupportedRegion(string region)
+    {
+        return AudibleApiDomainMap.ContainsKey(NormalizeRegion(region));
+    }
+
     public static string BuildApiBaseUrl(string region)
     {
         var normalizedRegion = NormalizeRegion(region);
