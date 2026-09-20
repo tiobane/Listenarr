@@ -278,7 +278,7 @@ jobs:
         if: steps.inspect_target.outputs.bump_state == 'pending' && steps.version_changes.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "[skip ci] Bump version to ${{ steps.resolve-version.outputs.VERSION }}"
           branch: "ci/canary-version-bump-${{ steps.resolve-version.outputs.VERSION }}"
           base: canary
@@ -299,7 +299,7 @@ jobs:
         continue-on-error: true
         uses: actions/github-script@v6
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const pr = Number('${{ steps.create_pr.outputs.pull-request-number }}');
             if (!pr) {
@@ -336,7 +336,7 @@ jobs:
           PR_NUMBER: ${{ steps.create_pr.outputs['pull-request-number'] }}
           NEW_VERSION: ${{ steps.resolve-version.outputs.VERSION }}
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const pr = parseInt(process.env.PR_NUMBER, 10);
             if (!pr) throw new Error('PR number missing');
