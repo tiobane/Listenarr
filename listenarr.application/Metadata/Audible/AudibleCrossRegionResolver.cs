@@ -30,22 +30,32 @@ public sealed class AudibleCrossRegionResolution
 
 public sealed class AudibleCrossRegionResolver
 {
+    private const int DiscoveryPageSize = 50;
+    private const int MaxTitleDiscoveryPages = 10;
+
     private readonly Func<string, string, bool, string?, Task<AudibleBookResponse?>> _getBookMetadataAsync;
     private readonly Func<string, int, int, string, string?, Task<AudibleSearchResponse?>> _searchByTitleAsync;
+    private readonly Func<string, string, int, int, string, string?, Task<AudibleSearchResponse?>> _searchByTitleAndAuthorAsync;
     private readonly ILogger _logger;
 
     public AudibleCrossRegionResolver(AudibleService audibleService, ILogger logger)
-        : this(audibleService.GetBookMetadataAsync, audibleService.SearchByTitleAsync, logger)
+        : this(
+            audibleService.GetBookMetadataAsync,
+            audibleService.SearchByTitleAsync,
+            audibleService.SearchByTitleAndAuthorAsync,
+            logger)
     {
     }
 
     internal AudibleCrossRegionResolver(
         Func<string, string, bool, string?, Task<AudibleBookResponse?>> getBookMetadataAsync,
         Func<string, int, int, string, string?, Task<AudibleSearchResponse?>> searchByTitleAsync,
+        Func<string, string, int, int, string, string?, Task<AudibleSearchResponse?>> searchByTitleAndAuthorAsync,
         ILogger logger)
     {
         _getBookMetadataAsync = getBookMetadataAsync;
         _searchByTitleAsync = searchByTitleAsync;
+        _searchByTitleAndAuthorAsync = searchByTitleAndAuthorAsync;
         _logger = logger;
     }
 
@@ -109,19 +119,7 @@ public sealed class AudibleCrossRegionResolver
 
             try
             {
-                var search = await _searchByTitleAsync(
-                    source.Title,
-                    1,
-                    50,
-                    targetRegion,
-                    null).ConfigureAwait(false);
-
-                var exactMatches = search?.Results?
-                    .Where(candidate =>
-                        !string.IsNullOrWhiteSpace(candidate.Asin) &&
-                        string.Equals(candidate.SkuGroup, source.SkuGroup, StringComparison.OrdinalIgnoreCase))
-                    .ToList() ?? new List<AudibleSearchResult>();
-
+                var exactMatches = await DiscoverExactMatchesAsync(source, targetRegion, cancellationToken).ConfigureAwait(false);
                 foreach (var candidate in exactMatches)
                 {
                     AddVariant(
@@ -152,6 +150,83 @@ public sealed class AudibleCrossRegionResolver
         }
 
         return resolution;
+    }
+
+    private async Task<List<AudibleSearchResult>> DiscoverExactMatchesAsync(
+        AudibleBookResponse source,
+        string targetRegion,
+        CancellationToken cancellationToken)
+    {
+        var author = source.Authors?
+            .Select(item => item?.Name)
+            .FirstOrDefault(name => !string.IsNullOrWhiteSpace(name));
+
+        if (!string.IsNullOrWhiteSpace(author))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var authorSearch = await _searchByTitleAndAuthorAsync(
+                source.Title!,
+                author!,
+                1,
+                DiscoveryPageSize,
+                targetRegion,
+                null).ConfigureAwait(false);
+
+            var authorMatches = FindExactSkuGroupMatches(authorSearch, source.SkuGroup!);
+            if (authorMatches.Count > 0)
+            {
+                _logger.LogDebug(
+                    "Audible cross-region discovery found SKU group {SkuGroup} in {Region} using title+author search",
+                    source.SkuGroup,
+                    targetRegion);
+                return authorMatches;
+            }
+        }
+
+        var matches = new List<AudibleSearchResult>();
+        for (var page = 1; page <= MaxTitleDiscoveryPages; page++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var search = await _searchByTitleAsync(
+                source.Title!,
+                page,
+                DiscoveryPageSize,
+                targetRegion,
+                null).ConfigureAwait(false);
+
+            matches.AddRange(FindExactSkuGroupMatches(search, source.SkuGroup!));
+            if (matches.Count > 0)
+            {
+                break;
+            }
+
+            var resultCount = search?.Results?.Count ?? 0;
+            var totalResults = search?.TotalResults;
+            if (resultCount == 0 ||
+                (totalResults.HasValue && page * DiscoveryPageSize >= totalResults.Value) ||
+                resultCount < DiscoveryPageSize)
+            {
+                break;
+            }
+        }
+
+        return matches
+            .Where(candidate => !string.IsNullOrWhiteSpace(candidate.Asin))
+            .GroupBy(candidate => candidate.Asin!, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    private static List<AudibleSearchResult> FindExactSkuGroupMatches(
+        AudibleSearchResponse? search,
+        string skuGroup)
+    {
+        return search?.Results?
+            .Where(candidate =>
+                !string.IsNullOrWhiteSpace(candidate.Asin) &&
+                string.Equals(candidate.SkuGroup, skuGroup, StringComparison.OrdinalIgnoreCase))
+            .ToList() ?? new List<AudibleSearchResult>();
     }
 
     private static void AddVariant(
