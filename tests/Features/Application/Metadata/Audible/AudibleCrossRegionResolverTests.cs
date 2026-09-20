@@ -27,12 +27,19 @@ namespace Listenarr.Tests.Features.Application.Metadata.Audible
                 Title = "Zero Day",
                 Region = "de",
                 Sku = "BK_RHDE_002148DE",
-                SkuGroup = "BK_RHDE_002148"
+                SkuGroup = "BK_RHDE_002148",
+                Authors = new List<AudibleAuthor> { new() { Name = "David Baldacci" } }
             };
 
+            var titleSearchCalled = false;
             var resolver = new AudibleCrossRegionResolver(
                 (_, _, _, _) => Task.FromResult<AudibleBookResponse?>(source),
-                (_, _, _, region, _) => Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse
+                (_, _, _, _, _) =>
+                {
+                    titleSearchCalled = true;
+                    return Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse());
+                },
+                (_, _, _, _, _, _) => Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse
                 {
                     Results = new List<AudibleSearchResult>
                     {
@@ -61,11 +68,74 @@ namespace Listenarr.Tests.Features.Application.Metadata.Audible
                 new[] { "de", "us" });
 
             Assert.NotNull(result);
+            Assert.False(titleSearchCalled);
             Assert.Equal("BK_RHDE_002148", result.SkuGroup);
             Assert.Equal(2, result.Variants.Count);
             Assert.Contains(result.Variants, variant => variant.Region == "de" && variant.Asin == "B00H7CH4Z8");
             Assert.Contains(result.Variants, variant => variant.Region == "us" && variant.Asin == "B00TKMPBZ8");
             Assert.DoesNotContain(result.Variants, variant => variant.Asin == "B00WRONG01");
+        }
+
+        [Fact]
+        public async Task ResolveAsync_FallsBackToPagedTitleSearchUntilExactSkuGroupIsFound()
+        {
+            var source = new AudibleBookResponse
+            {
+                Asin = "B00H42MTR4",
+                Title = "Zero Day",
+                Region = "de",
+                Sku = "BK_RHDE_002150DE",
+                SkuGroup = "BK_RHDE_002150"
+            };
+
+            var searchedPages = new List<int>();
+            var resolver = new AudibleCrossRegionResolver(
+                (_, _, _, _) => Task.FromResult<AudibleBookResponse?>(source),
+                (_, page, _, _, _) =>
+                {
+                    searchedPages.Add(page);
+                    if (page == 1)
+                    {
+                        var wrongResults = Enumerable.Range(1, 50)
+                            .Select(index => new AudibleSearchResult
+                            {
+                                Asin = $"B00WR{index:00000}",
+                                Title = "Zero Day",
+                                SkuGroup = "BK_RHDE_002148"
+                            })
+                            .ToList();
+
+                        return Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse
+                        {
+                            Results = wrongResults,
+                            TotalResults = 51
+                        });
+                    }
+
+                    return Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse
+                    {
+                        Results = new List<AudibleSearchResult>
+                        {
+                            new()
+                            {
+                                Asin = "B00U07JF72",
+                                Title = "Zero Day",
+                                Sku = "BK_RHDE_002150",
+                                SkuGroup = "BK_RHDE_002150"
+                            }
+                        },
+                        TotalResults = 51
+                    });
+                },
+                (_, _, _, _, _, _) => Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse()),
+                NullLogger.Instance);
+
+            var result = await resolver.ResolveAsync(source.Asin!, "de", new[] { "us" });
+
+            Assert.NotNull(result);
+            Assert.Equal(new[] { 1, 2 }, searchedPages);
+            Assert.Contains(result.Variants, variant => variant.Region == "us" && variant.Asin == "B00U07JF72");
+            Assert.DoesNotContain(result.Variants, variant => variant.Asin.StartsWith("B00WR", StringComparison.Ordinal));
         }
 
         [Fact]
@@ -84,6 +154,11 @@ namespace Listenarr.Tests.Features.Application.Metadata.Audible
             var resolver = new AudibleCrossRegionResolver(
                 (_, _, _, _) => Task.FromResult<AudibleBookResponse?>(source),
                 (_, _, _, _, _) =>
+                {
+                    searchCalled = true;
+                    return Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse());
+                },
+                (_, _, _, _, _, _) =>
                 {
                     searchCalled = true;
                     return Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse());
@@ -127,6 +202,7 @@ namespace Listenarr.Tests.Features.Application.Metadata.Audible
                         TotalResults = 0
                     });
                 },
+                (_, _, _, _, _, _) => Task.FromResult<AudibleSearchResponse?>(new AudibleSearchResponse()),
                 NullLogger.Instance);
 
             await resolver.ResolveAsync(
