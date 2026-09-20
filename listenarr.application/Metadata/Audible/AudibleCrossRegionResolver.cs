@@ -246,43 +246,49 @@ public sealed class AudibleCrossRegionResolver
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.TryAddWithoutValidation("User-Agent", "Dalvik/2.1.0 (Linux; U; Android 15); com.audible.application");
         request.Headers.TryAddWithoutValidation("Accept", "application/json");
-        request.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip");
         request.Headers.TryAddWithoutValidation("Accept-Charset", "utf-8");
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var response = await DirectSearchHttpClient.SendAsync(request, cts.Token).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var response = await DirectSearchHttpClient.SendAsync(request, cts.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return null;
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token).ConfigureAwait(false);
+            var root = document.RootElement;
+
+            var results = root.TryGetProperty("products", out var products) && products.ValueKind == JsonValueKind.Array
+                ? products.EnumerateArray()
+                    .Where(product => product.ValueKind == JsonValueKind.Object)
+                    .Select(product => AudibleProductMapper.MapProductToBookResponse(product, safeRegion))
+                    .Where(product => product != null)
+                    .Select(product => AudibleProductMapper.MapBookResponseToSearchResult(product!))
+                    .Where(product => product != null)
+                    .Cast<AudibleSearchResult>()
+                    .Where(product => !AudibleSearchResultFilter.IndicatesPodcast(product))
+                    .ToList()
+                : new List<AudibleSearchResult>();
+
+            results = AudibleProductMapper.ApplyLanguageFilter(results, language);
+            var totalResults = root.TryGetProperty("total_results", out var totalResultsElement) &&
+                               totalResultsElement.TryGetInt32(out var parsedTotalResults)
+                ? parsedTotalResults
+                : results.Count;
+
+            return new AudibleSearchResponse
+            {
+                Results = results,
+                TotalResults = totalResults
+            };
+        }
+        catch (TaskCanceledException)
         {
             return null;
         }
-
-        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token).ConfigureAwait(false);
-        var root = document.RootElement;
-
-        var results = root.TryGetProperty("products", out var products) && products.ValueKind == JsonValueKind.Array
-            ? products.EnumerateArray()
-                .Where(product => product.ValueKind == JsonValueKind.Object)
-                .Select(product => AudibleProductMapper.MapProductToBookResponse(product, safeRegion))
-                .Where(product => product != null)
-                .Select(product => AudibleProductMapper.MapBookResponseToSearchResult(product!))
-                .Where(product => product != null)
-                .Cast<AudibleSearchResult>()
-                .Where(product => !AudibleSearchResultFilter.IndicatesPodcast(product))
-                .ToList()
-            : new List<AudibleSearchResult>();
-
-        results = AudibleProductMapper.ApplyLanguageFilter(results, language);
-        var totalResults = root.TryGetProperty("total_results", out var totalResultsElement) &&
-                           totalResultsElement.TryGetInt32(out var parsedTotalResults)
-            ? parsedTotalResults
-            : results.Count;
-
-        return new AudibleSearchResponse
-        {
-            Results = results,
-            TotalResults = totalResults
-        };
     }
 
     private static List<AudibleSearchResult> FindExactSkuGroupMatches(
