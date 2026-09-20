@@ -8,6 +8,7 @@
  * (at your option) any later version.
  */
 
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Metadata.Audible;
@@ -32,6 +33,10 @@ public sealed class AudibleCrossRegionResolver
 {
     private const int DiscoveryPageSize = 50;
     private const int MaxTitleDiscoveryPages = 10;
+    private const string DirectSearchResponseGroups =
+        "media,contributors,series,product_attrs,product_desc,product_extended_attrs,category_ladders";
+
+    private static readonly HttpClient DirectSearchHttpClient = new();
 
     private readonly Func<string, string, bool, string?, Task<AudibleBookResponse?>> _getBookMetadataAsync;
     private readonly Func<string, int, int, string, string?, Task<AudibleSearchResponse?>> _searchByTitleAsync;
@@ -42,7 +47,7 @@ public sealed class AudibleCrossRegionResolver
         : this(
             audibleService.GetBookMetadataAsync,
             audibleService.SearchByTitleAsync,
-            audibleService.SearchByTitleAndAuthorAsync,
+            SearchByTitleAndAuthorDirectAsync,
             logger)
     {
     }
@@ -176,7 +181,7 @@ public sealed class AudibleCrossRegionResolver
             if (authorMatches.Count > 0)
             {
                 _logger.LogDebug(
-                    "Audible cross-region discovery found SKU group {SkuGroup} in {Region} using title+author search",
+                    "Audible cross-region discovery found SKU group {SkuGroup} in {Region} using direct title+author catalog search",
                     source.SkuGroup,
                     targetRegion);
                 return authorMatches;
@@ -216,6 +221,68 @@ public sealed class AudibleCrossRegionResolver
             .GroupBy(candidate => candidate.Asin!, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.First())
             .ToList();
+    }
+
+    private static async Task<AudibleSearchResponse?> SearchByTitleAndAuthorDirectAsync(
+        string title,
+        string author,
+        int page,
+        int limit,
+        string region,
+        string? language)
+    {
+        var safeRegion = AudibleRequestHelper.NormalizeRegion(region);
+        var parameters = new Dictionary<string, string?>
+        {
+            ["title"] = title?.Trim(),
+            ["author"] = author?.Trim(),
+            ["num_results"] = Math.Clamp(limit, 1, 50).ToString(),
+            ["page"] = Math.Max(0, page - 1).ToString(),
+            ["products_sort_by"] = "Title",
+            ["response_groups"] = DirectSearchResponseGroups
+        };
+
+        var url = $"{AudibleRequestHelper.BuildApiBaseUrl(safeRegion)}/1.0/catalog/products/?{AudibleRequestHelper.BuildQueryString(parameters)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        request.Headers.TryAddWithoutValidation("User-Agent", "Dalvik/2.1.0 (Linux; U; Android 15); com.audible.application");
+        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+        request.Headers.TryAddWithoutValidation("Accept-Encoding", "gzip");
+        request.Headers.TryAddWithoutValidation("Accept-Charset", "utf-8");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var response = await DirectSearchHttpClient.SendAsync(request, cts.Token).ConfigureAwait(false);
+        if (!response.IsSuccessStatusCode)
+        {
+            return null;
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false);
+        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cts.Token).ConfigureAwait(false);
+        var root = document.RootElement;
+
+        var results = root.TryGetProperty("products", out var products) && products.ValueKind == JsonValueKind.Array
+            ? products.EnumerateArray()
+                .Where(product => product.ValueKind == JsonValueKind.Object)
+                .Select(product => AudibleProductMapper.MapProductToBookResponse(product, safeRegion))
+                .Where(product => product != null)
+                .Select(product => AudibleProductMapper.MapBookResponseToSearchResult(product!))
+                .Where(product => product != null)
+                .Cast<AudibleSearchResult>()
+                .Where(product => !AudibleSearchResultFilter.IndicatesPodcast(product))
+                .ToList()
+            : new List<AudibleSearchResult>();
+
+        results = AudibleProductMapper.ApplyLanguageFilter(results, language);
+        var totalResults = root.TryGetProperty("total_results", out var totalResultsElement) &&
+                           totalResultsElement.TryGetInt32(out var parsedTotalResults)
+            ? parsedTotalResults
+            : results.Count;
+
+        return new AudibleSearchResponse
+        {
+            Results = results,
+            TotalResults = totalResults
+        };
     }
 
     private static List<AudibleSearchResult> FindExactSkuGroupMatches(
