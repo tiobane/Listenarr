@@ -175,13 +175,12 @@ namespace Listenarr.Application.Downloads.Submission
                 }
             }
 
-            // Only consider non-rejected, score > 0 results
-            var topResult = scoredResults
+            var acceptableResults = scoredResults
                 .Where(s => !s.IsRejected && s.TotalScore > 0)
                 .OrderByDescending(s => s.TotalScore)
-                .FirstOrDefault();
+                .ToList();
 
-            if (topResult == null)
+            if (acceptableResults.Count == 0)
             {
                 logger.LogWarning("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
                 return new SearchAndDownloadResult
@@ -191,37 +190,70 @@ namespace Listenarr.Application.Downloads.Submission
                 };
             }
 
-            // Assign score to SearchResult
-            topResult.SearchResult.Score = topResult.TotalScore;
+            var existingDownloads = await downloadRepository.GetByAudiobookIdAsync(audiobookId);
 
-            var candidate = TrustedDownloadCandidateFactory.Create(topResult.SearchResult);
-            var isTorrent = candidate.SourceDescriptor.Protocol == DownloadProtocol.Torrent;
-            var downloadClientId = await downloadClientSelector.GetAppropriateDownloadClientAsync(isTorrent);
-
-            if (downloadClientId == null)
+            foreach (var scoredResult in acceptableResults)
             {
-                logger.LogWarning("No suitable download client found for type: {Type}", isTorrent ? "Torrent" : "NZB");
+                scoredResult.SearchResult.Score = scoredResult.TotalScore;
+                var candidate = TrustedDownloadCandidateFactory.Create(scoredResult.SearchResult);
+
+                if (DownloadReleaseDuplicateGuard.WasAlreadyUsed(audiobookId, candidate, existingDownloads))
+                {
+                    logger.LogInformation(
+                        "Skipping previously used release for audiobook {AudiobookId}: '{Title}' ({ReleaseId})",
+                        audiobookId,
+                        LogRedaction.SanitizeText(candidate.Title),
+                        LogRedaction.SanitizeText(candidate.Id));
+                    continue;
+                }
+
+                var isTorrent = candidate.SourceDescriptor.Protocol == DownloadProtocol.Torrent;
+                var downloadClientId = await downloadClientSelector.GetAppropriateDownloadClientAsync(isTorrent);
+
+                if (downloadClientId == null)
+                {
+                    logger.LogWarning("No suitable download client found for type: {Type}", isTorrent ? "Torrent" : "NZB");
+                    return new SearchAndDownloadResult
+                    {
+                        Success = false,
+                        Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results"
+                    };
+                }
+
+                // Send to download client with audiobookId for proper metadata linking.
+                var downloadId = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
+
+                // The active-download guard can win a race between search and submission.
+                // Treat that as a no-op rather than reporting a successful grab.
+                if (string.IsNullOrWhiteSpace(downloadId))
+                {
+                    return new SearchAndDownloadResult
+                    {
+                        Success = false,
+                        Message = "An active download already exists for this audiobook"
+                    };
+                }
+
+                await LogDownloadHistory(audiobook, "Search", scoredResult.SearchResult);
+
                 return new SearchAndDownloadResult
                 {
-                    Success = false,
-                    Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results"
+                    Success = true,
+                    Message = "Successfully sent to download client",
+                    DownloadId = downloadId,
+                    IndexerUsed = "Search",
+                    DownloadClientUsed = downloadClientId,
+                    SearchResult = scoredResult.SearchResult
                 };
             }
 
-            // Send to download client with audiobookId for proper metadata linking
-            var downloadId2 = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
-
-            // Log to history
-            await LogDownloadHistory(audiobook, "Search", topResult.SearchResult);
-
+            logger.LogInformation(
+                "All acceptable search results for audiobook {AudiobookId} were previously used; no download was sent",
+                audiobookId);
             return new SearchAndDownloadResult
             {
-                Success = true,
-                Message = $"Successfully sent to download client",
-                DownloadId = downloadId2,
-                IndexerUsed = "Search",
-                DownloadClientUsed = downloadClientId,
-                SearchResult = topResult.SearchResult
+                Success = false,
+                Message = "No new acceptable releases found"
             };
         }
 
@@ -249,6 +281,17 @@ namespace Listenarr.Application.Downloads.Submission
             {
                 try
                 {
+                    var existingDownloads = await downloadRepository.GetByAudiobookIdAsync(audiobookIdValue);
+                    if (DownloadReleaseDuplicateGuard.WasAlreadyUsed(audiobookIdValue, candidate, existingDownloads))
+                    {
+                        logger.LogInformation(
+                            "Skipping previously used release for audiobook {AudiobookId}: '{Title}' ({ReleaseId})",
+                            audiobookIdValue,
+                            LogRedaction.SanitizeText(candidate.Title),
+                            LogRedaction.SanitizeText(candidate.Id));
+                        return string.Empty;
+                    }
+
                     if (await DownloadDuplicateGuard.HasActiveDownloadAsync(
                             audiobookIdValue,
                             configurationService,
