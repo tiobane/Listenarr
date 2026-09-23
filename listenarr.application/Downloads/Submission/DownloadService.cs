@@ -149,52 +149,23 @@ namespace Listenarr.Application.Downloads.Submission
             // to true to ensure only indexers are queried (no Amazon/Audible scraping).
             var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
 
-            if (searchResults == null || !searchResults.Any())
+            var (selectedSearchResult, candidate, failureMessage) = await DownloadReleaseCandidateSelector.SelectAsync(
+                audiobookId,
+                audiobook,
+                searchResults,
+                qualityProfileService,
+                downloadRepository,
+                logger);
+
+            if (candidate is null || selectedSearchResult is null)
             {
                 return new SearchAndDownloadResult
                 {
                     Success = false,
-                    Message = "No search results found"
+                    Message = failureMessage ?? "No new acceptable releases found"
                 };
             }
 
-            // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
-
-            // Log all scored results for debugging
-            logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, LogRedaction.SanitizeText(audiobook.Title));
-            foreach (var scoredResult in scoredResults.OrderByDescending(s => s.TotalScore))
-            {
-                var status = scoredResult.IsRejected ? "REJECTED" : (scoredResult.TotalScore > 0 ? "ACCEPTABLE" : "LOW SCORE");
-                logger.LogInformation("  [{Status}] Score: {Score} | Title: {Title} | Source: {Source} | Size: {Size}MB | Seeders: {Seeders} | Quality: {Quality}",
-                    status, scoredResult.TotalScore, LogRedaction.SanitizeText(scoredResult.SearchResult.Title), LogRedaction.SanitizeText(scoredResult.SearchResult.Source),
-                    scoredResult.SearchResult.Size / 1024 / 1024, scoredResult.SearchResult.Seeders, scoredResult.SearchResult.Quality);
-                if (scoredResult.IsRejected && scoredResult.RejectionReasons.Any())
-                {
-                    logger.LogInformation("    Rejection reasons: {Reasons}", string.Join(", ", scoredResult.RejectionReasons));
-                }
-            }
-
-            // Only consider non-rejected, score > 0 results
-            var topResult = scoredResults
-                .Where(s => !s.IsRejected && s.TotalScore > 0)
-                .OrderByDescending(s => s.TotalScore)
-                .FirstOrDefault();
-
-            if (topResult == null)
-            {
-                logger.LogWarning("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
-                return new SearchAndDownloadResult
-                {
-                    Success = false,
-                    Message = "No acceptable search results found"
-                };
-            }
-
-            // Assign score to SearchResult
-            topResult.SearchResult.Score = topResult.TotalScore;
-
-            var candidate = TrustedDownloadCandidateFactory.Create(topResult.SearchResult);
             var isTorrent = candidate.SourceDescriptor.Protocol == DownloadProtocol.Torrent;
             var downloadClientId = await downloadClientSelector.GetAppropriateDownloadClientAsync(isTorrent);
 
@@ -208,20 +179,30 @@ namespace Listenarr.Application.Downloads.Submission
                 };
             }
 
-            // Send to download client with audiobookId for proper metadata linking
-            var downloadId2 = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
+            // Send to download client with audiobookId for proper metadata linking.
+            var downloadId = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
 
-            // Log to history
-            await LogDownloadHistory(audiobook, "Search", topResult.SearchResult);
+            // The active-download guard can win a race between search and submission.
+            // Treat that as a no-op rather than reporting a successful grab.
+            if (string.IsNullOrWhiteSpace(downloadId))
+            {
+                return new SearchAndDownloadResult
+                {
+                    Success = false,
+                    Message = "An active download already exists for this audiobook"
+                };
+            }
+
+            await LogDownloadHistory(audiobook, "Search", selectedSearchResult);
 
             return new SearchAndDownloadResult
             {
                 Success = true,
-                Message = $"Successfully sent to download client",
-                DownloadId = downloadId2,
+                Message = "Successfully sent to download client",
+                DownloadId = downloadId,
                 IndexerUsed = "Search",
                 DownloadClientUsed = downloadClientId,
-                SearchResult = topResult.SearchResult
+                SearchResult = selectedSearchResult
             };
         }
 
@@ -249,6 +230,17 @@ namespace Listenarr.Application.Downloads.Submission
             {
                 try
                 {
+                    var existingDownloads = await downloadRepository.GetByAudiobookIdAsync(audiobookIdValue);
+                    if (DownloadReleaseDuplicateGuard.WasAlreadyUsed(audiobookIdValue, candidate, existingDownloads))
+                    {
+                        logger.LogInformation(
+                            "Skipping previously used release for audiobook {AudiobookId}: '{Title}' ({ReleaseId})",
+                            audiobookIdValue,
+                            LogRedaction.SanitizeText(candidate.Title),
+                            LogRedaction.SanitizeText(candidate.Id));
+                        return string.Empty;
+                    }
+
                     if (await DownloadDuplicateGuard.HasActiveDownloadAsync(
                             audiobookIdValue,
                             configurationService,

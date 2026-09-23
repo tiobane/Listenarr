@@ -50,7 +50,10 @@ namespace Listenarr.Application.Downloads.Submission
                     ["Seeders"] = candidate.Seeders ?? 0,
                     ["Quality"] = candidate.Quality ?? string.Empty,
                     ["Language"] = candidate.Language ?? string.Empty,
-                    ["DownloadType"] = submission.Protocol.ToString()
+                    ["DownloadType"] = submission.Protocol.ToString(),
+                    [DownloadReleaseDuplicateGuard.ReleaseIdMetadataKey] = candidate.Id,
+                    [DownloadReleaseDuplicateGuard.IndexerIdMetadataKey] = candidate.SourceDescriptor.IndexerId?.ToString() ?? string.Empty,
+                    [DownloadReleaseDuplicateGuard.IndexerImplementationMetadataKey] = candidate.SourceDescriptor.IndexerImplementation ?? string.Empty
                 }
             };
         }
