@@ -32,19 +32,16 @@ internal static class DownloadReleaseDuplicateGuard
             }
 
             var existingReleaseId = existing.GetMetadataString(ReleaseIdMetadataKey);
-            if (!string.IsNullOrWhiteSpace(existingReleaseId))
+            if (!string.IsNullOrWhiteSpace(existingReleaseId) &&
+                ReleaseIdMatches(candidate, existing, existingReleaseId))
             {
-                if (ReleaseIdMatches(candidate, existing, existingReleaseId))
-                {
-                    return true;
-                }
-
-                // A persisted release identity is authoritative. Do not fall back to URL
-                // heuristics when it explicitly identifies a different release.
-                continue;
+                return true;
             }
 
-            if (LegacyNzbHydraReleaseMatches(candidate, existing))
+            // NZBHydra's GUID/download URL can contain a volatile suffix, so compare the
+            // stable getnzb token as well. This also makes the guard work for legacy rows
+            // that predate persisted ReleaseId metadata.
+            if (NzbHydraReleaseMatches(candidate, existing))
             {
                 return true;
             }
@@ -79,7 +76,7 @@ internal static class DownloadReleaseDuplicateGuard
                string.Equals(existingSource, candidate.Source, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool LegacyNzbHydraReleaseMatches(
+    private static bool NzbHydraReleaseMatches(
         TrustedDownloadCandidate candidate,
         Download existing)
     {
@@ -127,7 +124,7 @@ internal static class DownloadReleaseDuplicateGuard
         }
 
         // NZBHydra may append a volatile suffix such as '.-64598322' to the stable
-        // release identifier. Ignore that suffix so legacy downloads can be matched.
+        // release identifier. Ignore that suffix so repeated links map to one release.
         var volatileSuffixIndex = token.IndexOf(".-", StringComparison.Ordinal);
         return volatileSuffixIndex > 0 ? token[..volatileSuffixIndex] : token;
     }
