@@ -8,7 +8,6 @@
  * (at your option) any later version.
  */
 
-using Listenarr.Application.Common;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Application.Downloads.Submission;
