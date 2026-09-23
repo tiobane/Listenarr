@@ -149,111 +149,60 @@ namespace Listenarr.Application.Downloads.Submission
             // to true to ensure only indexers are queried (no Amazon/Audible scraping).
             var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
 
-            if (searchResults == null || !searchResults.Any())
+            var (selectedSearchResult, candidate, failureMessage) = await DownloadReleaseCandidateSelector.SelectAsync(
+                audiobookId,
+                audiobook,
+                searchResults,
+                qualityProfileService,
+                downloadRepository,
+                logger);
+
+            if (candidate is null || selectedSearchResult is null)
             {
                 return new SearchAndDownloadResult
                 {
                     Success = false,
-                    Message = "No search results found"
+                    Message = failureMessage ?? "No new acceptable releases found"
                 };
             }
 
-            // Score results against quality profile
-            var scoredResults = await qualityProfileService.ScoreSearchResults(searchResults, audiobook.QualityProfile);
+            var isTorrent = candidate.SourceDescriptor.Protocol == DownloadProtocol.Torrent;
+            var downloadClientId = await downloadClientSelector.GetAppropriateDownloadClientAsync(isTorrent);
 
-            // Log all scored results for debugging
-            logger.LogInformation("Scored {Count} search results for audiobook '{Title}':", scoredResults.Count, LogRedaction.SanitizeText(audiobook.Title));
-            foreach (var scoredResult in scoredResults.OrderByDescending(s => s.TotalScore))
+            if (downloadClientId == null)
             {
-                var status = scoredResult.IsRejected ? "REJECTED" : (scoredResult.TotalScore > 0 ? "ACCEPTABLE" : "LOW SCORE");
-                logger.LogInformation("  [{Status}] Score: {Score} | Title: {Title} | Source: {Source} | Size: {Size}MB | Seeders: {Seeders} | Quality: {Quality}",
-                    status, scoredResult.TotalScore, LogRedaction.SanitizeText(scoredResult.SearchResult.Title), LogRedaction.SanitizeText(scoredResult.SearchResult.Source),
-                    scoredResult.SearchResult.Size / 1024 / 1024, scoredResult.SearchResult.Seeders, scoredResult.SearchResult.Quality);
-                if (scoredResult.IsRejected && scoredResult.RejectionReasons.Any())
-                {
-                    logger.LogInformation("    Rejection reasons: {Reasons}", string.Join(", ", scoredResult.RejectionReasons));
-                }
-            }
-
-            var acceptableResults = scoredResults
-                .Where(s => !s.IsRejected && s.TotalScore > 0)
-                .OrderByDescending(s => s.TotalScore)
-                .ToList();
-
-            if (acceptableResults.Count == 0)
-            {
-                logger.LogWarning("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
+                logger.LogWarning("No suitable download client found for type: {Type}", isTorrent ? "Torrent" : "NZB");
                 return new SearchAndDownloadResult
                 {
                     Success = false,
-                    Message = "No acceptable search results found"
+                    Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results"
                 };
             }
 
-            var existingDownloads = await downloadRepository.GetByAudiobookIdAsync(audiobookId);
+            // Send to download client with audiobookId for proper metadata linking.
+            var downloadId = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
 
-            foreach (var scoredResult in acceptableResults)
+            // The active-download guard can win a race between search and submission.
+            // Treat that as a no-op rather than reporting a successful grab.
+            if (string.IsNullOrWhiteSpace(downloadId))
             {
-                scoredResult.SearchResult.Score = scoredResult.TotalScore;
-                var candidate = TrustedDownloadCandidateFactory.Create(scoredResult.SearchResult);
-
-                if (DownloadReleaseDuplicateGuard.WasAlreadyUsed(audiobookId, candidate, existingDownloads))
-                {
-                    logger.LogInformation(
-                        "Skipping previously used release for audiobook {AudiobookId}: '{Title}' ({ReleaseId})",
-                        audiobookId,
-                        LogRedaction.SanitizeText(candidate.Title),
-                        LogRedaction.SanitizeText(candidate.Id));
-                    continue;
-                }
-
-                var isTorrent = candidate.SourceDescriptor.Protocol == DownloadProtocol.Torrent;
-                var downloadClientId = await downloadClientSelector.GetAppropriateDownloadClientAsync(isTorrent);
-
-                if (downloadClientId == null)
-                {
-                    logger.LogWarning("No suitable download client found for type: {Type}", isTorrent ? "Torrent" : "NZB");
-                    return new SearchAndDownloadResult
-                    {
-                        Success = false,
-                        Message = $"No suitable download client found for {(isTorrent ? "torrent" : "NZB")} results"
-                    };
-                }
-
-                // Send to download client with audiobookId for proper metadata linking.
-                var downloadId = await SendToDownloadClientAsync(candidate, downloadClientId, audiobookId);
-
-                // The active-download guard can win a race between search and submission.
-                // Treat that as a no-op rather than reporting a successful grab.
-                if (string.IsNullOrWhiteSpace(downloadId))
-                {
-                    return new SearchAndDownloadResult
-                    {
-                        Success = false,
-                        Message = "An active download already exists for this audiobook"
-                    };
-                }
-
-                await LogDownloadHistory(audiobook, "Search", scoredResult.SearchResult);
-
                 return new SearchAndDownloadResult
                 {
-                    Success = true,
-                    Message = "Successfully sent to download client",
-                    DownloadId = downloadId,
-                    IndexerUsed = "Search",
-                    DownloadClientUsed = downloadClientId,
-                    SearchResult = scoredResult.SearchResult
+                    Success = false,
+                    Message = "An active download already exists for this audiobook"
                 };
             }
 
-            logger.LogInformation(
-                "All acceptable search results for audiobook {AudiobookId} were previously used; no download was sent",
-                audiobookId);
+            await LogDownloadHistory(audiobook, "Search", selectedSearchResult);
+
             return new SearchAndDownloadResult
             {
-                Success = false,
-                Message = "No new acceptable releases found"
+                Success = true,
+                Message = "Successfully sent to download client",
+                DownloadId = downloadId,
+                IndexerUsed = "Search",
+                DownloadClientUsed = downloadClientId,
+                SearchResult = selectedSearchResult
             };
         }
 

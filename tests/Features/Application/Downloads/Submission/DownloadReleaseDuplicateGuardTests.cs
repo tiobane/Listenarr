@@ -1,6 +1,10 @@
+using Listenarr.Tests.Common;
+
 namespace Listenarr.Tests.Features.Application.Downloads.Submission;
 
-public class DownloadReleaseDuplicateGuardTests
+[Trait("Name", nameof(DownloadReleaseDuplicateGuardTests))]
+[Trait("Category", "Unit")]
+public class DownloadReleaseDuplicateGuardTests : BaseTests
 {
     [Fact]
     public void WasAlreadyUsed_MatchesPersistedReleaseIdForSameAudiobook()
