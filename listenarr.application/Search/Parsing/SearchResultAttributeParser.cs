@@ -32,6 +32,13 @@ public static class SearchResultAttributeParser
             { "SPA", "Spanish" }, { "ES", "Spanish" }
         };
 
+    private static readonly HashSet<int> RecognizedTitleBitrates =
+        new() { 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 };
+
+    private static readonly Regex TitleBitratePattern = new(
+        @"\b(?<bitrate>\d{2,3})\s*(?:kbps|kbit/s|kb/s)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public static string DetectQualityFromTags(string tags)
     {
         var lowerTags = tags.ToLowerInvariant();
@@ -87,6 +94,27 @@ public static class SearchResultAttributeParser
             return "MP3";
 
         return "Unknown";
+    }
+
+    /// <summary>
+    /// Conservative fallback for indexers that expose bitrate only in the release title.
+    /// A bitrate is accepted only when it has an explicit bitrate unit and is one of the
+    /// common audiobook/audio bitrates. The result is intentionally codec-agnostic.
+    /// </summary>
+    public static string? DetectQualityFromTitle(string? title)
+    {
+        if (string.IsNullOrWhiteSpace(title))
+            return null;
+
+        var bitrateMatch = TitleBitratePattern.Match(title);
+        if (!bitrateMatch.Success ||
+            !int.TryParse(bitrateMatch.Groups["bitrate"].Value, out var bitrate) ||
+            !RecognizedTitleBitrates.Contains(bitrate))
+        {
+            return null;
+        }
+
+        return $"{bitrate}kbps";
     }
 
     public static string DetectFormatFromTags(string tags)

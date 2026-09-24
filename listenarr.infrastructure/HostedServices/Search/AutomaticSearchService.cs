@@ -16,6 +16,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+using Listenarr.Application.Search.Scoring;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -257,9 +258,10 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            var acceptableResults = scoredResults
-                .Where(s => !s.IsRejected && s.TotalScore > 0)
-                .OrderByDescending(s => s.TotalScore)
+            var acceptableResults = AutomaticSearchQualityComparer.OrderByScoreThenQuality(
+                    scoredResults.Where(s => !s.IsRejected && s.TotalScore > 0),
+                    s => s.TotalScore,
+                    s => s.SearchResult)
                 .ToList();
 
             if (acceptableResults.Count == 0)
@@ -275,22 +277,23 @@ namespace Listenarr.Infrastructure.HostedServices.Search
 
             foreach (var result in acceptableResults)
             {
+                var effectiveResultQuality = AutomaticSearchQualityComparer.ResolveEffectiveQuality(result.SearchResult);
                 _logger.LogInformation("Considering result for audiobook '{Title}': {ResultTitle} (Score: {Score}, Quality: {Quality})",
-                    audiobook.Title, result.SearchResult.Title, result.TotalScore, result.SearchResult.Quality);
+                    audiobook.Title, result.SearchResult.Title, result.TotalScore, effectiveResultQuality ?? "unknown");
 
                 // Check whether this candidate is actually an upgrade before attempting submission.
                 if (!string.IsNullOrEmpty(bestExistingQuality))
                 {
-                    var resultIsBetter = _qualityEvaluator.IsQualityBetter(result.SearchResult.Quality, bestExistingQuality, audiobook.QualityProfile);
+                    var resultIsBetter = AutomaticSearchQualityComparer.IsBetter(result.SearchResult, bestExistingQuality);
                     if (!resultIsBetter)
                     {
                         _logger.LogInformation("Result quality '{ResultQuality}' is not better than existing quality '{ExistingQuality}' for audiobook '{Title}', skipping candidate",
-                            result.SearchResult.Quality, bestExistingQuality, audiobook.Title);
+                            effectiveResultQuality ?? "unknown", bestExistingQuality, audiobook.Title);
                         continue;
                     }
 
                     _logger.LogInformation("Result quality '{ResultQuality}' is better than existing quality '{ExistingQuality}', attempting download",
-                        result.SearchResult.Quality, bestExistingQuality);
+                        effectiveResultQuality ?? "unknown", bestExistingQuality);
                 }
 
                 // Add score to the search result for tracking.
