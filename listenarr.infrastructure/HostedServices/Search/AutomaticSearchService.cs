@@ -243,6 +243,7 @@ namespace Listenarr.Infrastructure.HostedServices.Search
             {
                 _logger.LogDebug(ex, "Failed to broadcast scored search results for audiobook {Id}", audiobook.Id);
             }
+
             foreach (var scoredResult in scoredResults.OrderByDescending(s => s.TotalScore))
             {
                 var status = scoredResult.IsRejected ? "REJECTED" : (scoredResult.TotalScore > 0 ? "ACCEPTABLE" : "LOW SCORE");
@@ -256,68 +257,79 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
-            var topResult = scoredResults
-                .Where(s => !s.IsRejected) // Only non-rejected results
+            var acceptableResults = scoredResults
+                .Where(s => !s.IsRejected && s.TotalScore > 0)
                 .OrderByDescending(s => s.TotalScore)
-                .FirstOrDefault(); // Pick only the top scoring result
+                .ToList();
 
-            if (topResult == null)
+            if (acceptableResults.Count == 0)
             {
                 _logger.LogInformation("No acceptable search results found for audiobook '{Title}' after quality filtering", audiobook.Title);
                 return 0;
             }
 
-            _logger.LogInformation("Found top result for audiobook '{Title}': {ResultTitle} (Score: {Score}, Quality: {Quality})",
-                audiobook.Title, topResult.SearchResult.Title, topResult.TotalScore, topResult.SearchResult.Quality);
-
-            // Check if the found result is better quality than what we already have
-            if (!string.IsNullOrEmpty(bestExistingQuality))
+            if (string.IsNullOrEmpty(bestExistingQuality))
             {
-                var resultIsBetter = _qualityEvaluator.IsQualityBetter(topResult.SearchResult.Quality, bestExistingQuality, audiobook.QualityProfile);
-                if (!resultIsBetter)
-                {
-                    _logger.LogInformation("Top result quality '{ResultQuality}' is not better than existing quality '{ExistingQuality}' for audiobook '{Title}', skipping download",
-                        topResult.SearchResult.Quality, bestExistingQuality, audiobook.Title);
-                    return 0;
-                }
-                _logger.LogInformation("Top result quality '{ResultQuality}' is better than existing quality '{ExistingQuality}', proceeding with download",
-                    topResult.SearchResult.Quality, bestExistingQuality);
-            }
-            else
-            {
-                _logger.LogInformation("No existing files for audiobook '{Title}', proceeding with download", audiobook.Title);
+                _logger.LogInformation("No existing files for audiobook '{Title}', evaluating acceptable releases for download", audiobook.Title);
             }
 
-            // Add score to the search result for tracking
-            topResult.SearchResult.Score = topResult.TotalScore;
-
-            // Queue download for the top result
-            var downloadsQueued = 0;
-            try
+            foreach (var result in acceptableResults)
             {
-                // Determine appropriate download client for this result
-                var isTorrent = _resultClassifier.IsTorrentResult(topResult.SearchResult);
-                var downloadClientId = await _downloadClientSelector.GetAppropriateDownloadClientAsync(topResult.SearchResult, isTorrent);
+                _logger.LogInformation("Considering result for audiobook '{Title}': {ResultTitle} (Score: {Score}, Quality: {Quality})",
+                    audiobook.Title, result.SearchResult.Title, result.TotalScore, result.SearchResult.Quality);
 
-                if (string.IsNullOrEmpty(downloadClientId))
+                // Check whether this candidate is actually an upgrade before attempting submission.
+                if (!string.IsNullOrEmpty(bestExistingQuality))
                 {
-                    _logger.LogWarning("No suitable download client found for result type: {Type}", isTorrent ? "torrent" : "NZB");
-                    return 0;
+                    var resultIsBetter = _qualityEvaluator.IsQualityBetter(result.SearchResult.Quality, bestExistingQuality, audiobook.QualityProfile);
+                    if (!resultIsBetter)
+                    {
+                        _logger.LogInformation("Result quality '{ResultQuality}' is not better than existing quality '{ExistingQuality}' for audiobook '{Title}', skipping candidate",
+                            result.SearchResult.Quality, bestExistingQuality, audiobook.Title);
+                        continue;
+                    }
+
+                    _logger.LogInformation("Result quality '{ResultQuality}' is better than existing quality '{ExistingQuality}', attempting download",
+                        result.SearchResult.Quality, bestExistingQuality);
                 }
 
-                await downloadService.StartDownloadAsync(topResult.SearchResult, downloadClientId, audiobook.Id);
-                downloadsQueued++;
+                // Add score to the search result for tracking.
+                result.SearchResult.Score = result.TotalScore;
 
-                _logger.LogInformation("Queued download for audiobook '{Title}': {ResultTitle} (Score: {Score})",
-                    audiobook.Title, topResult.SearchResult.Title, topResult.TotalScore);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
-            {
-                _logger.LogError(ex, "Failed to queue download for audiobook '{Title}': {ResultTitle}",
-                    audiobook.Title, topResult.SearchResult.Title);
+                try
+                {
+                    // Determine appropriate download client for this result.
+                    var isTorrent = _resultClassifier.IsTorrentResult(result.SearchResult);
+                    var downloadClientId = await _downloadClientSelector.GetAppropriateDownloadClientAsync(result.SearchResult, isTorrent);
+
+                    if (string.IsNullOrEmpty(downloadClientId))
+                    {
+                        _logger.LogWarning("No suitable download client found for result type: {Type}; trying next acceptable release",
+                            isTorrent ? "torrent" : "NZB");
+                        continue;
+                    }
+
+                    var downloadId = await downloadService.StartDownloadAsync(result.SearchResult, downloadClientId, audiobook.Id);
+                    if (string.IsNullOrWhiteSpace(downloadId))
+                    {
+                        _logger.LogInformation("Result was not queued for audiobook '{Title}': {ResultTitle}; trying next acceptable release",
+                            audiobook.Title, result.SearchResult.Title);
+                        continue;
+                    }
+
+                    _logger.LogInformation("Queued download for audiobook '{Title}': {ResultTitle} (Score: {Score})",
+                        audiobook.Title, result.SearchResult.Title, result.TotalScore);
+                    return 1;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
+                {
+                    _logger.LogError(ex, "Failed to queue download for audiobook '{Title}': {ResultTitle}; trying next acceptable release",
+                        audiobook.Title, result.SearchResult.Title);
+                }
             }
 
-            return downloadsQueued;
+            _logger.LogInformation("No new acceptable release was queued for audiobook '{Title}'", audiobook.Title);
+            return 0;
         }
 
     }
