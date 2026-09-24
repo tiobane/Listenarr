@@ -17,7 +17,7 @@
  */
 
 using Listenarr.Application.Audiobooks.Matching;
-using Listenarr.Domain.Common;
+using Listenarr.Application.Search.Scoring;
 using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.HostedServices.Search
@@ -66,6 +66,13 @@ namespace Listenarr.Infrastructure.HostedServices.Search
         }
 
         public bool IsQualityBetter(string? candidateQuality, string? existingQuality, QualityProfile? profile)
-            => QualityMatcher.IsLabelBetter(candidateQuality, existingQuality, profile);
+        {
+            // Automatic upgrade selection compares the actual information encoded in the quality
+            // labels (lossless/bitrate), not the profile's global UI ordering across codec blocks.
+            // The profile parameter is kept for call-site compatibility; cutoff semantics remain
+            // profile-driven in AudiobookQualityCutoffEvaluator above.
+            _ = profile;
+            return AutomaticSearchQualityComparer.IsLabelBetter(candidateQuality, existingQuality);
+        }
     }
 }
