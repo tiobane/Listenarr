@@ -12,6 +12,8 @@ using Microsoft.Extensions.Logging;
 
 namespace Listenarr.Infrastructure.HostedServices.Search
 {
+    internal sealed record AutomaticSearchQueryVariant(string Name, string Query);
+
     internal sealed class AutomaticSearchResultClassifier
     {
         private readonly ILogger _logger;
@@ -35,6 +37,53 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 parts.Add(audiobook.Series);
 
             return string.Join(" ", parts);
+        }
+
+        public IReadOnlyList<AutomaticSearchQueryVariant> BuildSearchQueries(Audiobook audiobook)
+        {
+            ArgumentNullException.ThrowIfNull(audiobook);
+
+            var variants = new List<AutomaticSearchQueryVariant>();
+            var preciseQuery = BuildSearchQuery(audiobook);
+
+            if (!string.IsNullOrWhiteSpace(preciseQuery))
+            {
+                variants.Add(new AutomaticSearchQueryVariant("Precise", preciseQuery));
+            }
+
+            var primaryAuthor = audiobook.Authors?.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(audiobook.Title) &&
+                !string.IsNullOrWhiteSpace(primaryAuthor))
+            {
+                var broadQuery = $"{audiobook.Title} {primaryAuthor}";
+                if (!variants.Any(variant =>
+                        string.Equals(variant.Query, broadQuery, StringComparison.OrdinalIgnoreCase)))
+                {
+                    variants.Add(new AutomaticSearchQueryVariant("Broad", broadQuery));
+                }
+            }
+
+            return variants;
+        }
+
+        public List<SearchResult> MergeUniqueResults(IEnumerable<SearchResult> searchResults)
+        {
+            ArgumentNullException.ThrowIfNull(searchResults);
+
+            var uniqueResults = new List<SearchResult>();
+
+            foreach (var result in searchResults)
+            {
+                if (uniqueResults.Any(existing =>
+                        DownloadReleaseDuplicateGuard.RepresentsSameRelease(existing, result)))
+                {
+                    continue;
+                }
+
+                uniqueResults.Add(result);
+            }
+
+            return uniqueResults;
         }
 
         public bool IsTorrentResult(SearchResult result)
