@@ -284,8 +284,30 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 }
             }
 
+            var runtimePlausibleResults = scoredResults
+                .Where(s => !s.IsRejected && s.TotalScore > 0)
+                .Where(scoredResult =>
+                {
+                    var evaluation = AutomaticSearchRuntimeGuard.Evaluate(scoredResult.SearchResult, audiobook.Runtime);
+                    if (!evaluation.ShouldReject)
+                    {
+                        return true;
+                    }
+
+                    _logger.LogInformation(
+                        "Rejecting automatic search candidate for audiobook '{Title}' because estimated runtime {EstimatedRuntime:F1} min at {Bitrate} kbps is below minimum {MinimumRuntime:F1} min (25% of reference runtime {ReferenceRuntime} min): {ResultTitle}",
+                        audiobook.Title,
+                        evaluation.EstimatedRuntimeMinutes,
+                        evaluation.BitrateKbps,
+                        evaluation.MinimumRuntimeMinutes,
+                        audiobook.Runtime,
+                        scoredResult.SearchResult.Title);
+                    return false;
+                })
+                .ToList();
+
             var acceptableResults = AutomaticSearchQualityComparer.OrderByScoreThenQuality(
-                    scoredResults.Where(s => !s.IsRejected && s.TotalScore > 0),
+                    runtimePlausibleResults,
                     s => s.TotalScore,
                     s => s.SearchResult)
                 .ToList();
