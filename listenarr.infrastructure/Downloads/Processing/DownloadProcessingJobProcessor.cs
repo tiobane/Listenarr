@@ -124,7 +124,6 @@ namespace Listenarr.Infrastructure.Downloads.Processing
 
             if (job.Status == ProcessingJobStatus.Failed)
             {
-                // Unable to process import job and retries exceeded
                 var download = await downloadRepository.GetByIdAsync(job.DownloadId);
                 if (download == null)
                 {
@@ -132,6 +131,30 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                     return;
                 }
 
+                var failureMessage = job.ErrorMessage ?? "Unable to import the download";
+                if (job.TryGetJobDataString(DownloadReleaseDuplicateGuard.UnusableReleaseMetadataKey, out var unusableReleaseValue) &&
+                    bool.TryParse(unusableReleaseValue, out var unusableRelease) && unusableRelease)
+                {
+                    download.SetMetadata(DownloadReleaseDuplicateGuard.UnusableReleaseMetadataKey, true);
+                    await downloadService.UpdateAsync(download.Failed(failureMessage));
+
+                    var configurationService = scope.ServiceProvider.GetRequiredService<IConfigurationService>();
+                    var client = await configurationService.GetDownloadClientConfigurationAsync(download.DownloadClientId);
+                    if (client == null)
+                    {
+                        logger.LogWarning(
+                            "Unable to run failed-download recovery for unusable release {DownloadId}: client {ClientId} is unavailable",
+                            download.Id,
+                            download.DownloadClientId);
+                        return;
+                    }
+
+                    var monitorProcessor = scope.ServiceProvider.GetRequiredService<DownloadMonitorProcessor>();
+                    await monitorProcessor.HandleFailedDownloadAsync(download, client, failureMessage, cancellationToken);
+                    return;
+                }
+
+                // Generic processing failures remain import-blocked for manual inspection.
                 await downloadService.UpdateAsync(
                     download.Blocked(
                         "Unable to import the download",
@@ -317,6 +340,7 @@ namespace Listenarr.Infrastructure.Downloads.Processing
                     var existingAudiobookFiles = await audiobookFileRepository.GetByAudiobookIdAsync(audiobook.Id, cancellationToken);
                     if (existingAudiobookFiles.Count <= 0)
                     {
+                        job.JobData[DownloadReleaseDuplicateGuard.UnusableReleaseMetadataKey] = true;
                         await FailImportAsync(job, downloadProcessingJobService, historyRepository, download, audiobook,
                             correlationId, "No audio files were registered after file import", cancellationToken);
                         return;
