@@ -10,7 +10,7 @@
 
 namespace Listenarr.Application.Downloads.Submission;
 
-internal static class DownloadReleaseDuplicateGuard
+public static class DownloadReleaseDuplicateGuard
 {
     internal const string ReleaseIdMetadataKey = "ReleaseId";
     internal const string IndexerIdMetadataKey = "IndexerId";
@@ -48,6 +48,69 @@ internal static class DownloadReleaseDuplicateGuard
         }
 
         return false;
+    }
+
+    public static bool RepresentsSameRelease(SearchResult first, SearchResult second)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+
+        if (!SourcesMatch(first.Source, second.Source))
+        {
+            return false;
+        }
+
+        if (SearchResultReleaseIdsMatch(first, second))
+        {
+            return true;
+        }
+
+        if (SearchResultNzbHydraReleaseMatches(first, second))
+        {
+            return true;
+        }
+
+        return LocatorMatches(first.NzbUrl, second.NzbUrl) ||
+               LocatorMatches(first.MagnetLink, second.MagnetLink) ||
+               LocatorMatches(first.TorrentUrl, second.TorrentUrl);
+    }
+
+    private static bool SearchResultReleaseIdsMatch(SearchResult first, SearchResult second)
+    {
+        if (string.IsNullOrWhiteSpace(first.Id) ||
+            string.IsNullOrWhiteSpace(second.Id) ||
+            !string.Equals(first.Id.Trim(), second.Id.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return !first.IndexerId.HasValue ||
+               !second.IndexerId.HasValue ||
+               first.IndexerId.Value == second.IndexerId.Value;
+    }
+
+    private static bool SearchResultNzbHydraReleaseMatches(SearchResult first, SearchResult second)
+    {
+        var firstToken = TryGetNzbHydraReleaseToken(first.NzbUrl);
+        var secondToken = TryGetNzbHydraReleaseToken(second.NzbUrl);
+
+        return !string.IsNullOrWhiteSpace(firstToken) &&
+               !string.IsNullOrWhiteSpace(secondToken) &&
+               string.Equals(firstToken, secondToken, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool SourcesMatch(string? firstSource, string? secondSource)
+    {
+        return string.IsNullOrWhiteSpace(firstSource) ||
+               string.IsNullOrWhiteSpace(secondSource) ||
+               string.Equals(firstSource, secondSource, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LocatorMatches(string? firstLocator, string? secondLocator)
+    {
+        return !string.IsNullOrWhiteSpace(firstLocator) &&
+               !string.IsNullOrWhiteSpace(secondLocator) &&
+               string.Equals(firstLocator, secondLocator, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool ReleaseIdMatches(

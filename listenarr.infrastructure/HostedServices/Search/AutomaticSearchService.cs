@@ -175,18 +175,43 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 return 0;
             }
 
-            // Build search query
-            var searchQuery = _resultClassifier.BuildSearchQuery(audiobook);
-            _logger.LogInformation("Searching for audiobook '{Title}' with query: {Query}", audiobook.Title, searchQuery);
+            var queryVariants = _resultClassifier.BuildSearchQueries(audiobook);
+            if (queryVariants.Count == 0)
+            {
+                _logger.LogInformation("No automatic search query could be built for audiobook '{Title}'", audiobook.Title);
+                return 0;
+            }
 
-            // Search for results
-            var searchResults = await searchService.SearchAsync(searchQuery, isAutomaticSearch: true);
-            _logger.LogInformation("Found {Count} raw search results for audiobook '{Title}'", searchResults.Count, audiobook.Title);
+            _logger.LogInformation(
+                "Automatic search query variants for '{Title}': {Queries}",
+                audiobook.Title,
+                string.Join(" | ", queryVariants.Select(variant => $"{variant.Name}: {variant.Query}")));
+
+            var rawSearchResults = new List<SearchResult>();
+
+            foreach (var queryVariant in queryVariants)
+            {
+                var queryResults = await searchService.SearchAsync(queryVariant.Query, isAutomaticSearch: true);
+                _logger.LogInformation(
+                    "{Variant} automatic search query returned {Count} results for audiobook '{Title}': {Query}",
+                    queryVariant.Name,
+                    queryResults.Count,
+                    audiobook.Title,
+                    queryVariant.Query);
+                rawSearchResults.AddRange(queryResults);
+            }
+
+            var searchResults = _resultClassifier.MergeUniqueResults(rawSearchResults);
+            _logger.LogInformation(
+                "Merged automatic search candidates for '{Title}': {UniqueCount} unique releases from {RawCount} raw results",
+                audiobook.Title,
+                searchResults.Count,
+                rawSearchResults.Count);
 
             // Broadcast detailed debug info about the raw search results to help diagnose automatic search failures
             try
             {
-                // Build a concise summary of up to 10 raw results
+                // Build a concise summary of up to 10 merged results
                 var rawSummaries = searchResults.Take(10).Select(r => new
                 {
                     title = r.Title,
@@ -201,7 +226,8 @@ namespace Listenarr.Infrastructure.HostedServices.Search
                 using var scope = _serviceScopeFactory.CreateScope();
                 var hub = scope.ServiceProvider.GetRequiredService<IHubContext<DownloadHub>>();
                 // Send structured payload with type and audiobookId so the UI can ignore automatic messages by default
-                await hub.Clients.All.SendCoreAsync("SearchProgress", new object[] { new { message = $"Automatic search query: {searchQuery}", details = new { rawCount = searchResults.Count, rawSamples = rawSummaries }, type = "automatic", audiobookId = audiobook.Id } });
+                var querySummary = string.Join(" | ", queryVariants.Select(variant => variant.Query));
+                await hub.Clients.All.SendCoreAsync("SearchProgress", new object[] { new { message = $"Automatic search queries: {querySummary}", details = new { rawCount = rawSearchResults.Count, uniqueCount = searchResults.Count, rawSamples = rawSummaries }, type = "automatic", audiobookId = audiobook.Id } });
             }
             catch (Exception ex) when (ex is not OperationCanceledException && ex is not OutOfMemoryException && ex is not StackOverflowException)
             {
