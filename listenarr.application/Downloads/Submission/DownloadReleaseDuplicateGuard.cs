@@ -15,6 +15,7 @@ public static class DownloadReleaseDuplicateGuard
     internal const string ReleaseIdMetadataKey = "ReleaseId";
     internal const string IndexerIdMetadataKey = "IndexerId";
     internal const string IndexerImplementationMetadataKey = "IndexerImplementation";
+    public const string UnusableReleaseMetadataKey = "UnusableReleasePayload";
 
     public static bool WasAlreadyUsed(
         int audiobookId,
@@ -26,7 +27,12 @@ public static class DownloadReleaseDuplicateGuard
 
         foreach (var existing in existingDownloads)
         {
-            if (existing.AudiobookId != audiobookId || existing.Status == DownloadStatus.Failed)
+            if (existing.AudiobookId != audiobookId)
+            {
+                continue;
+            }
+
+            if (existing.Status == DownloadStatus.Failed && !IsKnownUnusableRelease(existing))
             {
                 continue;
             }
@@ -73,6 +79,14 @@ public static class DownloadReleaseDuplicateGuard
         return LocatorMatches(first.NzbUrl, second.NzbUrl) ||
                LocatorMatches(first.MagnetLink, second.MagnetLink) ||
                LocatorMatches(first.TorrentUrl, second.TorrentUrl);
+    }
+
+    private static bool IsKnownUnusableRelease(Download download)
+    {
+        return string.Equals(
+            download.GetMetadataString(UnusableReleaseMetadataKey),
+            bool.TrueString,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool SearchResultReleaseIdsMatch(SearchResult first, SearchResult second)
