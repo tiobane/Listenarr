@@ -298,7 +298,7 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
                 case var (old, next) when old == next:
                     return;
                 case (_, DownloadStatus.Failed):
-                    await OnDownloadFailed(current, client, current.ErrorMessage ?? "Download failed in client", cancellationToken);
+                    await HandleFailedDownloadAsync(current, client, current.ErrorMessage ?? "Download failed in client", cancellationToken);
                     break;
                 case (_, DownloadStatus.Completed):
                     await OnDownloadCompleted(current);
@@ -364,7 +364,7 @@ namespace Listenarr.Infrastructure.Downloads.Monitoring
             await downloadPushService.HandlePushAsync(downloads, cancellationToken);
         }
 
-        private async Task OnDownloadFailed(
+        internal async Task HandleFailedDownloadAsync(
             Download download,
             DownloadClientConfiguration client,
             string errorMessage,
