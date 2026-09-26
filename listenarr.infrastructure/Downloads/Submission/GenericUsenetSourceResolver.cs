@@ -14,6 +14,8 @@ namespace Listenarr.Infrastructure.Downloads.Submission;
 public sealed class GenericUsenetSourceResolver(
     INzbFileDownloader downloader) : IDownloadSourceResolver
 {
+    private static readonly char[] UnsafeFileNameCharacters = ['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
+
     public int Priority => 0;
 
     public bool CanResolve(TrustedDownloadCandidate candidate)
@@ -35,6 +37,8 @@ public sealed class GenericUsenetSourceResolver(
             url,
             candidate.SourceDescriptor.IndexerId,
             cancellationToken);
+        var fileName = candidate.SourceDescriptor.FileName ?? $"{candidate.Title}.nzb";
+
         return new PreparedUsenetSubmission(
             candidate.Title,
             candidate.Artist,
@@ -45,10 +49,10 @@ public sealed class GenericUsenetSourceResolver(
             candidate.Size,
             url,
             bytes,
-            candidate.SourceDescriptor.FileName ?? $"{SanitizeFileName(candidate.Title)}.nzb");
+            SanitizeFileName(fileName));
     }
 
     private static string SanitizeFileName(string value)
         => string.Concat(value.Select(character =>
-            Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
+            char.IsControl(character) || UnsafeFileNameCharacters.Contains(character) ? '_' : character));
 }
