@@ -2,7 +2,7 @@ namespace Listenarr.Tests.Features.Infrastructure.Downloads.Submission;
 
 [Trait("Name", "GenericUsenetSourceResolverTests")]
 [Trait("Category", "GenericUsenetSourceResolver")]
-public sealed class GenericUsenetSourceResolverTests
+public sealed class GenericUsenetSourceResolverTests : BaseTests
 {
     private const string NzbUrl = "https://example.com/release.nzb";
 
