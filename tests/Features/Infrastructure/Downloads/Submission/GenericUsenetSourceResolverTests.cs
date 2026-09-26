@@ -1,3 +1,5 @@
+using Listenarr.Tests.Common;
+
 namespace Listenarr.Tests.Features.Infrastructure.Downloads.Submission;
 
 [Trait("Name", "GenericUsenetSourceResolverTests")]
