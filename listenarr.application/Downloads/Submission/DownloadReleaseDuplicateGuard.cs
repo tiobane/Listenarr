@@ -32,11 +32,6 @@ public static class DownloadReleaseDuplicateGuard
                 continue;
             }
 
-            if (existing.Status == DownloadStatus.Failed && !IsKnownUnusableRelease(existing))
-            {
-                continue;
-            }
-
             var existingReleaseId = existing.GetMetadataString(ReleaseIdMetadataKey);
             if (!string.IsNullOrWhiteSpace(existingReleaseId) &&
                 ReleaseIdMatches(candidate, existing, existingReleaseId))
@@ -48,6 +43,14 @@ public static class DownloadReleaseDuplicateGuard
             // stable getnzb token as well. This also makes the guard work for legacy rows
             // that predate persisted ReleaseId metadata.
             if (NzbHydraReleaseMatches(candidate, existing))
+            {
+                return true;
+            }
+
+            // Rows that predate persisted ReleaseId metadata may still have the original
+            // trusted locator. Reuse the same exact-locator fallback as search-result
+            // deduplication rather than inventing a second release identity scheme.
+            if (LegacyLocatorMatches(candidate, existing))
             {
                 return true;
             }
@@ -79,14 +82,6 @@ public static class DownloadReleaseDuplicateGuard
         return LocatorMatches(first.NzbUrl, second.NzbUrl) ||
                LocatorMatches(first.MagnetLink, second.MagnetLink) ||
                LocatorMatches(first.TorrentUrl, second.TorrentUrl);
-    }
-
-    private static bool IsKnownUnusableRelease(Download download)
-    {
-        return string.Equals(
-            download.GetMetadataString(UnusableReleaseMetadataKey),
-            bool.TrueString,
-            StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool SearchResultReleaseIdsMatch(SearchResult first, SearchResult second)
@@ -148,9 +143,7 @@ public static class DownloadReleaseDuplicateGuard
         }
 
         var existingSource = existing.GetMetadataString("Source");
-        return string.IsNullOrWhiteSpace(existingSource) ||
-               string.IsNullOrWhiteSpace(candidate.Source) ||
-               string.Equals(existingSource, candidate.Source, StringComparison.OrdinalIgnoreCase);
+        return SourcesMatch(existingSource, candidate.Source);
     }
 
     private static bool NzbHydraReleaseMatches(
@@ -158,9 +151,7 @@ public static class DownloadReleaseDuplicateGuard
         Download existing)
     {
         var existingSource = existing.GetMetadataString("Source");
-        if (!string.IsNullOrWhiteSpace(existingSource) &&
-            !string.IsNullOrWhiteSpace(candidate.Source) &&
-            !string.Equals(existingSource, candidate.Source, StringComparison.OrdinalIgnoreCase))
+        if (!SourcesMatch(existingSource, candidate.Source))
         {
             return false;
         }
@@ -177,6 +168,26 @@ public static class DownloadReleaseDuplicateGuard
             .Any(candidateToken =>
                 !string.IsNullOrWhiteSpace(candidateToken) &&
                 string.Equals(existingToken, candidateToken, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool LegacyLocatorMatches(
+        TrustedDownloadCandidate candidate,
+        Download existing)
+    {
+        var existingSource = existing.GetMetadataString("Source");
+        if (!SourcesMatch(existingSource, candidate.Source) ||
+            string.IsNullOrWhiteSpace(existing.OriginalUrl))
+        {
+            return false;
+        }
+
+        return candidate.SourceDescriptor.Locators
+            .Where(locator => locator.Kind is
+                DownloadSourceLocatorKind.NzbUrl or
+                DownloadSourceLocatorKind.Magnet or
+                DownloadSourceLocatorKind.TorrentUrl or
+                DownloadSourceLocatorKind.DirectUrl)
+            .Any(locator => LocatorMatches(existing.OriginalUrl, locator.Value));
     }
 
     internal static string? TryGetNzbHydraReleaseToken(string? url)
