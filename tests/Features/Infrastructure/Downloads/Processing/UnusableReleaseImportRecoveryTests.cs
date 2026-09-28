@@ -77,12 +77,12 @@ public class UnusableReleaseImportRecoveryTests : BaseTests
     }
 
     [Fact]
-    public void OrdinaryFailedRelease_RemainsRetryable()
+    public void OrdinaryFailedRelease_IsAlsoDeduplicatedByReleaseIdentity()
     {
         var candidate = CreateUsenetCandidate("release-123", "http://hydra/getnzb/api/111.-200?apikey=test");
         var failedDownload = CreateFailedDownload("release-123", unusable: false);
 
-        Assert.False(DownloadReleaseDuplicateGuard.WasAlreadyUsed(42, candidate, [failedDownload]));
+        Assert.True(DownloadReleaseDuplicateGuard.WasAlreadyUsed(42, candidate, [failedDownload]));
     }
 
     private static Download CreateFailedDownload(string releaseId, bool unusable)
